@@ -2,6 +2,8 @@ import { getRequestHeaders } from '../../../../script.js';
 import { ToolManager } from '../../../tool-calling.js';
 import { isValidUrl } from '../../../utils.js';
 
+// --- Schemas ---
+
 const getUserEnvironmentSchema = Object.freeze({
     '$schema': 'http://json-schema.org/draft-04/schema#',
     type: 'object',
@@ -14,13 +16,37 @@ const getYouTubeVideoScriptSchema = Object.freeze({
     type: 'object',
     properties: {
         url: {
-            type: 'string'
+            type: 'string',
+            description: 'The URL of the YouTube video.'
         },
     },
     required: [
         'url',
     ],
 });
+
+// New schema for VisitLinks
+const visitLinksSchema = Object.freeze({
+    '$schema': 'http://json-schema.org/draft-04/schema#',
+    type: 'object',
+    properties: {
+        links: {
+            type: 'array',
+            items: {
+                type: 'string',
+                format: 'uri', // Indicate it should be a URL
+            },
+            description: 'An array of web links (URLs) to visit.',
+            minItems: 1 // Require at least one link
+        },
+    },
+    required: [
+        'links',
+    ],
+});
+
+
+// --- Helper Functions ---
 
 const parseId = (url) => {
     // If the URL is already an ID, return it
@@ -32,6 +58,9 @@ const parseId = (url) => {
     const match = url.match(regex);
     return (match?.length && match[1] ? match[1] : url);
 };
+
+
+// --- Tool Action Functions ---
 
 function getUserEnvironment() {
     const dateTimeOptions = Intl.DateTimeFormat().resolvedOptions();
@@ -47,7 +76,6 @@ async function getYouTubeVideoScript({ url }) {
     if (!url) throw new Error('URL is required');
     if (!isValidUrl(url)) throw new Error('Invalid URL');
 
-
     const id = parseId(url);
     const result = await fetch('/api/search/transcript', {
         method: 'POST',
@@ -56,7 +84,7 @@ async function getYouTubeVideoScript({ url }) {
     });
 
     if (!result.ok) {
-        throw new Error('Failed to fetch YouTube video transcript');
+        throw new Error(`Failed to fetch YouTube video transcript: ${result.statusText}`);
     }
 
     const text = await result.text();
@@ -73,9 +101,56 @@ async function getYouTubeVideoScript({ url }) {
 
         return { title, date, views, author, description, transcript };
     } catch (error) {
+        // If parsing metadata fails, return at least the transcript
+        console.error("Error parsing YouTube metadata:", error);
         return { transcript: text };
     }
 }
+
+// New action function for VisitLinks
+async function visitLinks({ links }) {
+    if (!links || !Array.isArray(links) || links.length === 0) {
+        throw new Error('An array of links is required.');
+    }
+
+    const results = {};
+
+    // Use Promise.all to fetch content for all links concurrently
+    await Promise.all(links.map(async (url) => {
+        if (!isValidUrl(url)) {
+            results[url] = { error: 'Invalid URL provided.' };
+            return;
+        }
+
+        try {
+            // *** IMPORTANT ASSUMPTION ***
+            // Assumes a backend endpoint '/api/visit-links' exists that takes a URL,
+            // fetches its content server-side (to avoid CORS), extracts relevant text,
+            // and returns it as JSON { content: "..." }.
+            const response = await fetch('/api/visit-links', {
+                method: 'POST',
+                headers: getRequestHeaders(), // Use existing headers function
+                body: JSON.stringify({ url: url }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch content for ${url}: ${response.statusText}`);
+            }
+
+            const data = await response.json(); // Expecting { content: "..." }
+            results[url] = { content: data.content || 'No content extracted.' };
+
+        } catch (error) {
+            console.error(`Error visiting link ${url}:`, error);
+            results[url] = { error: error.message || 'Failed to fetch or process content.' };
+        }
+    }));
+
+    return results; // Returns an object like: { "url1": { "content": "..." }, "url2": { "error": "..." } }
+}
+
+
+// --- Tool Registration ---
 
 (function () {
     ToolManager.registerFunctionTool({
@@ -84,7 +159,7 @@ async function getYouTubeVideoScript({ url }) {
         description: 'Returns the user environment information: preferred language, local date and time, and timezone.',
         parameters: getUserEnvironmentSchema,
         action: getUserEnvironment,
-        formatMessage: () => '', // Suppress the default message
+        formatMessage: () => 'Getting user environment...', // Provide some feedback
     });
 
     ToolManager.registerFunctionTool({
@@ -93,6 +168,21 @@ async function getYouTubeVideoScript({ url }) {
         description: 'Returns a YouTube video script. Called when a YouTube video URL is detected in the user input.',
         parameters: getYouTubeVideoScriptSchema,
         action: getYouTubeVideoScript,
-        formatMessage: (args) => args && args.url ? `Getting video script for ${parseId(args.url)}...` : '',
+        formatMessage: (args) => args && args.url ? `Getting video script for ${parseId(args.url)}...` : 'Getting video script...',
+    });
+
+    // Register the new VisitLinks tool
+    ToolManager.registerFunctionTool({
+        name: 'VisitLinks',
+        displayName: 'Visit Web Links',
+        description: 'Visits the provided web links (URLs) and returns the content of the relevant pages.',
+        parameters: visitLinksSchema,
+        action: visitLinks,
+        formatMessage: (args) => {
+             const count = args?.links?.length || 0;
+             if (count === 1) return `Visiting 1 link...`;
+             if (count > 1) return `Visiting ${count} links...`;
+             return 'Preparing to visit links...';
+        },
     });
 })();
