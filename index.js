@@ -25,7 +25,6 @@ const getYouTubeVideoScriptSchema = Object.freeze({
     ],
 });
 
-// New schema for VisitLinks
 const visitLinksSchema = Object.freeze({
     '$schema': 'http://json-schema.org/draft-04/schema#',
     type: 'object',
@@ -38,6 +37,26 @@ const visitLinksSchema = Object.freeze({
             },
             description: 'An array of web links (URLs) to visit.',
             minItems: 1 // Require at least one link
+        },
+    },
+    required: [
+        'links',
+    ],
+});
+
+// New schema for VisitLinksHtml - same as VisitLinksSchema
+const visitLinksHtmlSchema = Object.freeze({
+    '$schema': 'http://json-schema.org/draft-04/schema#',
+    type: 'object',
+    properties: {
+        links: {
+            type: 'array',
+            items: {
+                type: 'string',
+                format: 'uri', // Indicate it should be a URL
+            },
+            description: 'An array of web links (URLs) to visit to get the HTML content.',
+            minItems: 1
         },
     },
     required: [
@@ -107,7 +126,7 @@ async function getYouTubeVideoScript({ url }) {
     }
 }
 
-// New action function for VisitLinks
+// Original visitLinks function (using hypothetical /api/visit-links)
 async function visitLinks({ links }) {
     if (!links || !Array.isArray(links) || links.length === 0) {
         throw new Error('An array of links is required.');
@@ -115,7 +134,6 @@ async function visitLinks({ links }) {
 
     const results = {};
 
-    // Use Promise.all to fetch content for all links concurrently
     await Promise.all(links.map(async (url) => {
         if (!isValidUrl(url)) {
             results[url] = { error: 'Invalid URL provided.' };
@@ -123,13 +141,9 @@ async function visitLinks({ links }) {
         }
 
         try {
-            // *** IMPORTANT ASSUMPTION ***
-            // Assumes a backend endpoint '/api/visit-links' exists that takes a URL,
-            // fetches its content server-side (to avoid CORS), extracts relevant text,
-            // and returns it as JSON { content: "..." }.
             const response = await fetch('/api/visit-links', {
                 method: 'POST',
-                headers: getRequestHeaders(), // Use existing headers function
+                headers: getRequestHeaders(),
                 body: JSON.stringify({ url: url }),
             });
 
@@ -146,7 +160,44 @@ async function visitLinks({ links }) {
         }
     }));
 
-    return results; // Returns an object like: { "url1": { "content": "..." }, "url2": { "error": "..." } }
+    return results;
+}
+
+// New visitLinksHtml function (using /api/search/visit)
+async function visitLinksHtml({ links }) {
+    if (!links || !Array.isArray(links) || links.length === 0) {
+        throw new Error('An array of links is required.');
+    }
+
+    const results = {};
+
+    await Promise.all(links.map(async (url) => {
+        if (!isValidUrl(url)) {
+            results[url] = { error: 'Invalid URL provided.' };
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/search/visit', {
+                method: 'POST',
+                headers: getRequestHeaders(), // Ensure this includes X-CSRF-Token, Authorization, and Cookie
+                body: JSON.stringify({ url: url, html: true }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch content for ${url}: ${response.statusText}`);
+            }
+
+            const data = await response.text(); // Assuming the response is plain HTML
+            results[url] = { html: data || '' };
+
+        } catch (error) {
+            console.error(`Error visiting link ${url}:`, error);
+            results[url] = { error: error.message || 'Failed to fetch or process content.' };
+        }
+    }));
+
+    return results;
 }
 
 
@@ -171,11 +222,10 @@ async function visitLinks({ links }) {
         formatMessage: (args) => args && args.url ? `Getting video script for ${parseId(args.url)}...` : 'Getting video script...',
     });
 
-    // Register the new VisitLinks tool
     ToolManager.registerFunctionTool({
         name: 'VisitLinks',
         displayName: 'Visit Web Links',
-        description: 'Visits the provided web links (URLs) and returns the content of the relevant pages.',
+        description: 'Visits the provided web links (URLs) and returns the content of the relevant pages (plain text).',
         parameters: visitLinksSchema,
         action: visitLinks,
         formatMessage: (args) => {
@@ -183,6 +233,21 @@ async function visitLinks({ links }) {
              if (count === 1) return `Visiting 1 link...`;
              if (count > 1) return `Visiting ${count} links...`;
              return 'Preparing to visit links...';
+        },
+    });
+
+    // Register the new VisitLinksHtml tool
+    ToolManager.registerFunctionTool({
+        name: 'VisitLinksHtml',
+        displayName: 'Visit Web Links (HTML)',
+        description: 'Visits the provided web links (URLs) and returns the full HTML content of the relevant pages.',
+        parameters: visitLinksHtmlSchema,
+        action: visitLinksHtml,
+        formatMessage: (args) => {
+             const count = args?.links?.length || 0;
+             if (count === 1) return `Visiting 1 link to get HTML...`;
+             if (count > 1) return `Visiting ${count} links to get HTML...`;
+             return 'Preparing to visit links to get HTML...';
         },
     });
 })();
