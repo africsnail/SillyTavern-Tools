@@ -33,7 +33,7 @@ const visitLinksSchema = Object.freeze({
             type: 'array',
             items: {
                 type: 'string',
-                format: 'uri', // Indicate it should be a URL
+                // format: 'uri', // Indicate it should be a URL
             },
             description: 'An array of web links (URLs) to visit.',
             minItems: 1 // Require at least one link
@@ -53,7 +53,7 @@ const visitLinksHtmlSchema = Object.freeze({
             type: 'array',
             items: {
                 type: 'string',
-                format: 'uri', // Indicate it should be a URL
+                // format: 'uri', // Indicate it should be a URL
             },
             description: 'An array of web links (URLs) to visit to get the HTML content.',
             minItems: 1
